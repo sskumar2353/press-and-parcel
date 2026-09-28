@@ -1,308 +1,781 @@
-import "dotenv/config";
-import http from "node:http";
-import nodemailer from "nodemailer";
+const http = require("http");
+const crypto = require("crypto");
+require("dotenv").config();
 
-const PORT = Number(process.env.PORT || 5000);
-const BUSINESS_NAME = process.env.BUSINESS_NAME || "Press & Parcel";
+const PORT = process.env.PORT || 5000;
 const OWNER_EMAIL = process.env.OWNER_EMAIL;
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const SMTP_HOST = process.env.SMTP_HOST || "smtp.gmail.com";
-const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
-const SMTP_SECURE = String(process.env.SMTP_SECURE ?? "true") === "true";
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const BUSINESS_NAME = process.env.BUSINESS_NAME || "Press & Parcel";
+const FRONTEND_URL = process.env.FRONTEND_URL || "*";
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-const allowedOrigins = new Set([
-  FRONTEND_URL,
-  "http://localhost:5173",
-  "http://localhost:5174"
-]);
+const RESEND_FROM =
+  process.env.RESEND_FROM ||
+  `${BUSINESS_NAME} <onboarding@resend.dev>`;
 
-for (const key of ["OWNER_EMAIL", "SMTP_USER", "SMTP_PASS"]) {
-  if (!process.env[key]) {
-    console.warn(`[config] Missing ${key}. Quote emails cannot be sent until .env is configured.`);
+const RATE_LIMIT_WINDOW = 15 * 60 * 1000;
+const RATE_LIMIT_MAX = 8;
+
+const rateLimitStore = new Map();
+
+function sendJson(res, req, statusCode, data) {
+  const origin = req.headers.origin;
+
+  let allowedOrigin = FRONTEND_URL;
+
+  if (FRONTEND_URL === "*" || !FRONTEND_URL) {
+    allowedOrigin = origin || "*";
   }
+
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin"
+  });
+
+  res.end(JSON.stringify(data));
 }
 
-const transporter = nodemailer.createTransport({
-  host: SMTP_HOST,
-  port: SMTP_PORT,
-  secure: SMTP_SECURE,
-  auth: {
-    user: SMTP_USER,
-    pass: SMTP_PASS
+function sendText(res, req, statusCode, message) {
+  const origin = req.headers.origin;
+
+  let allowedOrigin = FRONTEND_URL;
+
+  if (FRONTEND_URL === "*" || !FRONTEND_URL) {
+    allowedOrigin = origin || "*";
   }
-});
 
-const requestLog = new Map();
-const WINDOW_MS = 15 * 60 * 1000;
-const MAX_REQUESTS = 8;
+  res.writeHead(statusCode, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin"
+  });
 
-function clientIp(req) {
+  res.end(message);
+}
+
+function getClientIp(req) {
   const forwarded = req.headers["x-forwarded-for"];
-  return (forwarded ? String(forwarded).split(",")[0].trim() : req.socket.remoteAddress) || "unknown";
+
+  if (forwarded) {
+    return forwarded.split(",")[0].trim();
+  }
+
+  return (
+    req.socket.remoteAddress ||
+    "unknown"
+  );
 }
 
 function isRateLimited(ip) {
   const now = Date.now();
-  const recent = (requestLog.get(ip) || []).filter(time => now - time < WINDOW_MS);
-  if (recent.length >= MAX_REQUESTS) {
-    requestLog.set(ip, recent);
-    return true;
+
+  const existing = rateLimitStore.get(ip);
+
+  if (!existing) {
+    rateLimitStore.set(ip, {
+      count: 1,
+      firstRequest: now
+    });
+
+    return false;
   }
-  recent.push(now);
-  requestLog.set(ip, recent);
-  return false;
+
+  if (now - existing.firstRequest > RATE_LIMIT_WINDOW) {
+    rateLimitStore.set(ip, {
+      count: 1,
+      firstRequest: now
+    });
+
+    return false;
+  }
+
+  existing.count += 1;
+
+  return existing.count > RATE_LIMIT_MAX;
 }
 
-function getOrigin(req) {
-  const origin = req.headers.origin;
-  return allowedOrigins.has(origin) ? origin : FRONTEND_URL;
+function cleanupRateLimitStore() {
+  const now = Date.now();
+
+  for (const [ip, record] of rateLimitStore.entries()) {
+    if (now - record.firstRequest > RATE_LIMIT_WINDOW) {
+      rateLimitStore.delete(ip);
+    }
+  }
 }
 
-function corsHeaders(req) {
-  return {
-    "Access-Control-Allow-Origin": getOrigin(req),
-    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Vary": "Origin"
-  };
-}
-
-function sendJson(res, req, status, body) {
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    ...corsHeaders(req)
-  });
-  res.end(JSON.stringify(body));
-}
-
-function clean(value, max = 2000) {
-  return String(value ?? "").trim().slice(0, max);
-}
-
-function escapeHtml(value) {
-  return clean(value).replace(/[&<>"']/g, char => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#039;"
-  }[char]));
-}
+setInterval(cleanupRateLimitStore, 30 * 60 * 1000);
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", chunk => {
+
+    req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 100000) {
+
+      if (body.length > 1024 * 1024) {
         reject(new Error("Request body too large."));
         req.destroy();
       }
     });
+
     req.on("end", () => {
       try {
-        resolve(JSON.parse(body || "{}"));
-      } catch {
+        if (!body.trim()) {
+          resolve({});
+          return;
+        }
+
+        resolve(JSON.parse(body));
+      } catch (error) {
         reject(new Error("Invalid JSON."));
       }
     });
-    req.on("error", reject);
+
+    req.on("error", (error) => {
+      reject(error);
+    });
   });
 }
 
-function emailRows(data) {
-  const rows = [
-    ["Name", data.name],
-    ["Company / Organisation", data.company || "Not provided"],
-    ["Phone", data.phone],
-    ["Email", data.email],
-    ["Industry", data.industry || "Not selected"],
-    ["Product / Category", data.product || "Not specified"],
-    ["Quantity", data.quantity || "Not specified"],
-    ["Required by", data.deadline || "Not specified"],
-    ["Project Details", data.details || "Not provided"]
-  ];
-
-  return rows.map(([label, value]) => `
-    <tr>
-      <td style="padding:10px 12px;border:1px solid #dbe4ec;font-weight:700;color:#12385f;width:210px;">${escapeHtml(label)}</td>
-      <td style="padding:10px 12px;border:1px solid #dbe4ec;color:#40566b;">${escapeHtml(value).replace(/\n/g, "<br>")}</td>
-    </tr>
-  `).join("");
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
-function buildCustomerEmail(data) {
-  return {
-    subject: `We received your enquiry — ${BUSINESS_NAME}`,
-    text: `Hi ${data.name},
+function normalize(value) {
+  if (value === undefined || value === null) {
+    return "";
+  }
 
-Thank you for contacting ${BUSINESS_NAME}.
-
-We have received your enquiry for ${data.product || "your printing/branding requirement"}.
-
-Our team will review the details and contact you soon to discuss your requirement and quotation.
-
-Regards,
-${BUSINESS_NAME}
-Print. Brand. Deliver.`,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:680px;margin:auto;color:#172333;">
-        <div style="background:#12385f;padding:24px 28px;color:#fff;">
-          <h2 style="margin:0;">${BUSINESS_NAME}</h2>
-          <div style="margin-top:5px;color:#bfeaf2;">Print. Brand. Deliver.</div>
-        </div>
-        <div style="padding:30px 28px;">
-          <h2>Thank you, ${escapeHtml(data.name)}.</h2>
-          <p>We have received your enquiry successfully.</p>
-          <p>Our team will review your requirement and contact you soon to discuss the project and quotation.</p>
-          <p style="margin-top:28px;padding:16px;background:#f4f8fb;border-radius:10px;">
-            <strong>Requirement:</strong><br>
-            ${escapeHtml(data.product || "Printing / branding requirement")}
-          </p>
-        </div>
-      </div>
-    `
-  };
+  return String(value).trim();
 }
 
-function buildOwnerEmail(data) {
-  return {
-    subject: `New Quote Enquiry — ${data.name}${data.company ? ` | ${data.company}` : ""}`,
-    text: `New Press & Parcel enquiry
-
-Name: ${data.name}
-Company: ${data.company || "Not provided"}
-Phone: ${data.phone}
-Email: ${data.email}
-Industry: ${data.industry || "Not selected"}
-Product / Category: ${data.product || "Not specified"}
-Quantity: ${data.quantity || "Not specified"}
-Required by: ${data.deadline || "Not specified"}
-
-Project Details:
-${data.details || "Not provided"}
-`,
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:760px;margin:auto;color:#172333;">
-        <div style="background:#12385f;padding:24px 28px;color:#fff;">
-          <h2 style="margin:0;">New Quote Enquiry</h2>
-          <div style="margin-top:5px;color:#bfeaf2;">${BUSINESS_NAME}</div>
-        </div>
-        <div style="padding:28px;">
-          <p>A new customer has submitted the quotation form.</p>
-          <table style="border-collapse:collapse;width:100%;font-size:14px;">
-            ${emailRows(data)}
-          </table>
-          <p style="margin-top:20px;color:#64748b;font-size:12px;">Reply to this email to contact the customer directly.</p>
-        </div>
-      </div>
-    `
-  };
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-async function handleQuote(req, res) {
-  const ip = clientIp(req);
+function isValidPhone(phone) {
+  const digits = phone.replace(/\D/g, "");
 
-  if (isRateLimited(ip)) {
-    return sendJson(res, req, 429, { message: "Too many requests. Please try again later." });
+  return digits.length >= 7 && digits.length <= 15;
+}
+
+async function sendEmail({ to, subject, html, replyTo }) {
+  if (!RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is not configured.");
   }
 
-  if (!OWNER_EMAIL || !SMTP_USER || !SMTP_PASS) {
-    return sendJson(res, req, 500, {
-      message: "Email service is not configured. Check the backend .env file."
-    });
-  }
-
-  let body;
-  try {
-    body = await readJson(req);
-  } catch (error) {
-    return sendJson(res, req, 400, { message: error.message });
-  }
-
-  const data = {
-    name: clean(body.name, 120),
-    company: clean(body.company, 160),
-    phone: clean(body.phone, 60),
-    email: clean(body.email, 180),
-    industry: clean(body.industry, 100),
-    product: clean(body.product, 180),
-    quantity: clean(body.quantity, 80),
-    deadline: clean(body.deadline, 40),
-    details: clean(body.details, 4000)
+  const payload = {
+    from: RESEND_FROM,
+    to: [to],
+    subject,
+    html
   };
 
-  if (!data.name || !data.phone || !data.email) {
-    return sendJson(res, req, 400, {
-      message: "Name, phone and email are required."
-    });
+  if (replyTo) {
+    payload.reply_to = replyTo;
   }
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
-    return sendJson(res, req, 400, {
-      message: "Please provide a valid email address."
-    });
-  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${RESEND_API_KEY}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  let data;
 
   try {
-    const customer = buildCustomerEmail(data);
-    const owner = buildOwnerEmail(data);
-
-    await transporter.sendMail({
-      from: `"${BUSINESS_NAME}" <${SMTP_USER}>`,
-      to: OWNER_EMAIL,
-      replyTo: data.email,
-      subject: owner.subject,
-      text: owner.text,
-      html: owner.html
-    });
-
-    await transporter.sendMail({
-      from: `"${BUSINESS_NAME}" <${SMTP_USER}>`,
-      to: data.email,
-      replyTo: OWNER_EMAIL,
-      subject: customer.subject,
-      text: customer.text,
-      html: customer.html
-    });
-
-    return sendJson(res, req, 200, {
-      success: true,
-      message: "Your request was submitted successfully."
-    });
-  } catch (error) {
-    console.error("Email sending failed:", error);
-    return sendJson(res, req, 500, {
-      message: "The request could not be emailed right now. Please try again."
-    });
+    data = await response.json();
+  } catch {
+    data = {};
   }
+
+  if (!response.ok) {
+    console.error("Resend API error:", data);
+
+    throw new Error(
+      data.message ||
+        data.error ||
+        `Resend request failed with status ${response.status}`
+    );
+  }
+
+  console.log("Email sent successfully:", data.id || data);
+
+  return data;
+}
+
+function createInternalEmail({
+  name,
+  company,
+  phone,
+  email,
+  industry,
+  product,
+  quantity,
+  requiredBy,
+  details
+}) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>New Quote Request</title>
+</head>
+
+<body style="
+  margin: 0;
+  padding: 0;
+  background: #f4f6f8;
+  font-family: Arial, Helvetica, sans-serif;
+">
+
+  <div style="
+    max-width: 680px;
+    margin: 30px auto;
+    background: #ffffff;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+  ">
+
+    <div style="
+      background: #111827;
+      color: #ffffff;
+      padding: 24px;
+    ">
+      <h1 style="
+        margin: 0;
+        font-size: 24px;
+      ">
+        New Quote Request
+      </h1>
+
+      <p style="
+        margin: 8px 0 0;
+        color: #d1d5db;
+      ">
+        ${escapeHtml(BUSINESS_NAME)}
+      </p>
+    </div>
+
+    <div style="padding: 24px;">
+
+      <h2 style="
+        font-size: 18px;
+        margin-top: 0;
+        color: #111827;
+      ">
+        Customer Details
+      </h2>
+
+      <table style="
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+      ">
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold; width: 180px;">
+            Name
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(name)}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold;">
+            Company / Organisation
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(company || "-")}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold;">
+            Phone
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(phone)}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold;">
+            Email
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(email)}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold;">
+            Industry
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(industry || "-")}
+          </td>
+        </tr>
+
+      </table>
+
+      <hr style="
+        border: 0;
+        border-top: 1px solid #e5e7eb;
+        margin: 24px 0;
+      ">
+
+      <h2 style="
+        font-size: 18px;
+        color: #111827;
+      ">
+        Requirement
+      </h2>
+
+      <table style="
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+      ">
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold; width: 180px;">
+            Product / Category
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(product || "-")}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold;">
+            Quantity
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(quantity || "-")}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding: 10px 0; font-weight: bold;">
+            Required By
+          </td>
+          <td style="padding: 10px 0;">
+            ${escapeHtml(requiredBy || "-")}
+          </td>
+        </tr>
+
+      </table>
+
+      <div style="
+        margin-top: 20px;
+        padding: 18px;
+        background: #f9fafb;
+        border-radius: 8px;
+      ">
+
+        <h3 style="
+          margin-top: 0;
+          color: #111827;
+        ">
+          Project Details
+        </h3>
+
+        <p style="
+          margin-bottom: 0;
+          line-height: 1.6;
+          color: #374151;
+          white-space: pre-wrap;
+        ">
+          ${escapeHtml(details || "-")}
+        </p>
+
+      </div>
+
+      <div style="
+        margin-top: 25px;
+        padding-top: 18px;
+        border-top: 1px solid #e5e7eb;
+        color: #6b7280;
+        font-size: 13px;
+      ">
+        This enquiry was submitted through the ${escapeHtml(
+          BUSINESS_NAME
+        )} website.
+      </div>
+
+    </div>
+
+  </div>
+
+</body>
+</html>
+`;
+}
+
+function createCustomerConfirmationEmail({ name }) {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Request Received</title>
+</head>
+
+<body style="
+  margin: 0;
+  padding: 0;
+  background: #f4f6f8;
+  font-family: Arial, Helvetica, sans-serif;
+">
+
+  <div style="
+    max-width: 600px;
+    margin: 30px auto;
+    background: #ffffff;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+  ">
+
+    <div style="
+      background: #111827;
+      color: #ffffff;
+      padding: 28px;
+      text-align: center;
+    ">
+
+      <h1 style="
+        margin: 0;
+        font-size: 25px;
+      ">
+        ${escapeHtml(BUSINESS_NAME)}
+      </h1>
+
+      <p style="
+        margin: 8px 0 0;
+        color: #d1d5db;
+      ">
+        Print. Brand. Deliver.
+      </p>
+
+    </div>
+
+    <div style="padding: 30px;">
+
+      <h2 style="
+        margin-top: 0;
+        color: #111827;
+      ">
+        Request Received
+      </h2>
+
+      <p style="
+        color: #374151;
+        line-height: 1.7;
+      ">
+        Hello ${escapeHtml(name)},
+      </p>
+
+      <p style="
+        color: #374151;
+        line-height: 1.7;
+      ">
+        Thank you for contacting
+        <strong>${escapeHtml(BUSINESS_NAME)}</strong>.
+      </p>
+
+      <p style="
+        color: #374151;
+        line-height: 1.7;
+      ">
+        We have received your requirement successfully.
+        Our team will review the details and contact you shortly.
+      </p>
+
+      <div style="
+        margin: 25px 0;
+        padding: 18px;
+        background: #f9fafb;
+        border-radius: 8px;
+        color: #374151;
+      ">
+        <strong>What happens next?</strong>
+
+        <p style="
+          margin-bottom: 0;
+          line-height: 1.6;
+        ">
+          Our team will contact you to discuss your requirement,
+          quantity, specifications, pricing and delivery details.
+        </p>
+      </div>
+
+      <p style="
+        color: #374151;
+        line-height: 1.7;
+      ">
+        Regards,<br>
+        <strong>${escapeHtml(BUSINESS_NAME)}</strong><br>
+        Print. Brand. Deliver.
+      </p>
+
+    </div>
+
+    <div style="
+      padding: 18px 30px;
+      background: #f9fafb;
+      border-top: 1px solid #e5e7eb;
+      color: #6b7280;
+      font-size: 13px;
+      text-align: center;
+    ">
+      This is an automated confirmation email.
+    </div>
+
+  </div>
+
+</body>
+</html>
+`;
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, corsHeaders(req));
-    return res.end();
+  try {
+    const pathname = new URL(
+      req.url,
+      "http://localhost"
+    ).pathname;
+
+    if (req.method === "OPTIONS") {
+      const origin = req.headers.origin;
+
+      let allowedOrigin = FRONTEND_URL;
+
+      if (FRONTEND_URL === "*" || !FRONTEND_URL) {
+        allowedOrigin = origin || "*";
+      }
+
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": allowedOrigin,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Max-Age": "86400",
+        "Vary": "Origin"
+      });
+
+      res.end();
+
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/") {
+      return sendJson(res, req, 200, {
+        status: "ok",
+        service: BUSINESS_NAME,
+        message: `${BUSINESS_NAME} backend is running.`
+      });
+    }
+
+    if (req.method === "GET" && pathname === "/api/health") {
+      return sendJson(res, req, 200, {
+        status: "ok",
+        service: BUSINESS_NAME,
+        emailConfigured: Boolean(
+          RESEND_API_KEY &&
+          OWNER_EMAIL
+        )
+      });
+    }
+
+    if (req.method === "POST" && pathname === "/api/quote") {
+      const clientIp = getClientIp(req);
+
+      if (isRateLimited(clientIp)) {
+        return sendJson(res, req, 429, {
+          message:
+            "Too many requests. Please try again later."
+        });
+      }
+
+      const body = await readJson(req);
+
+      const name = normalize(body.name);
+      const company = normalize(
+        body.company ||
+        body.organisation ||
+        body.organization
+      );
+      const phone = normalize(body.phone);
+      const email = normalize(body.email).toLowerCase();
+      const industry = normalize(body.industry);
+      const product = normalize(
+        body.product ||
+        body.category
+      );
+      const quantity = normalize(body.quantity);
+      const requiredBy = normalize(
+        body.requiredBy ||
+        body.required_by ||
+        body.requiredDate
+      );
+      const details = normalize(
+        body.details ||
+        body.projectDetails ||
+        body.message
+      );
+
+      if (!name) {
+        return sendJson(res, req, 400, {
+          message: "Name is required."
+        });
+      }
+
+      if (!phone) {
+        return sendJson(res, req, 400, {
+          message: "Phone number is required."
+        });
+      }
+
+      if (!email) {
+        return sendJson(res, req, 400, {
+          message: "Email is required."
+        });
+      }
+
+      if (!isValidEmail(email)) {
+        return sendJson(res, req, 400, {
+          message: "Please provide a valid email address."
+        });
+      }
+
+      if (!isValidPhone(phone)) {
+        return sendJson(res, req, 400, {
+          message: "Please provide a valid phone number."
+        });
+      }
+
+      if (!OWNER_EMAIL) {
+        console.error(
+          "OWNER_EMAIL is not configured."
+        );
+
+        return sendJson(res, req, 500, {
+          message:
+            "The email service is not configured correctly."
+        });
+      }
+
+      if (!RESEND_API_KEY) {
+        console.error(
+          "RESEND_API_KEY is not configured."
+        );
+
+        return sendJson(res, req, 500, {
+          message:
+            "The email service is not configured correctly."
+        });
+      }
+
+      const internalEmailHtml = createInternalEmail({
+        name,
+        company,
+        phone,
+        email,
+        industry,
+        product,
+        quantity,
+        requiredBy,
+        details
+      });
+
+      const customerEmailHtml =
+        createCustomerConfirmationEmail({
+          name
+        });
+
+      try {
+        await sendEmail({
+          to: OWNER_EMAIL,
+          subject:
+            `New Quote Request - ${BUSINESS_NAME}`,
+          html: internalEmailHtml,
+          replyTo: email
+        });
+
+        await sendEmail({
+          to: email,
+          subject:
+            `We received your request - ${BUSINESS_NAME}`,
+          html: customerEmailHtml
+        });
+
+        console.log(
+          `Quote request processed successfully for ${email}`
+        );
+
+        return sendJson(res, req, 200, {
+          success: true,
+          message: "Request received"
+        });
+      } catch (emailError) {
+        console.error(
+          "Email sending failed:",
+          emailError
+        );
+
+        return sendJson(res, req, 500, {
+          message:
+            "Unable to send your request right now. Please try again later."
+        });
+      }
+    }
+
+    return sendJson(res, req, 404, {
+      message: "Route not found."
+    });
+
+  } catch (error) {
+    console.error(
+      "Server error:",
+      error
+    );
+
+    return sendJson(res, req, 500, {
+      message: "Internal server error."
+    });
   }
-
-  if (req.method === "GET" && new URL(req.url, "http://localhost").pathname === "/api/health") {
-
-  return sendJson(res, req, 200, {
-    status: "ok",
-    service: BUSINESS_NAME,
-    emailConfigured: Boolean(OWNER_EMAIL && SMTP_USER && SMTP_PASS)
-  });
-
-}
-
-  if (req.method === "POST" && req.url === "/api/quote") {
-    return handleQuote(req, res);
-  }
-
-  return sendJson(res, req, 404, { message: "Route not found." });
 });
 
 server.listen(PORT, () => {
-  console.log(`${BUSINESS_NAME} backend running on http://localhost:${PORT}`);
+  console.log(
+    `${BUSINESS_NAME} backend running on port ${PORT}`
+  );
+
+  console.log(
+    `Email provider: ${RESEND_API_KEY ? "Resend configured" : "Resend NOT configured"}`
+  );
+
+  console.log(
+    `Owner email: ${OWNER_EMAIL ? "configured" : "NOT configured"}`
+  );
 });
