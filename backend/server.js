@@ -286,13 +286,15 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  if (req.method === "GET" && req.url === "/api/health") {
-    return sendJson(res, req, 200, {
-      status: "ok",
-      service: BUSINESS_NAME,
-      emailConfigured: Boolean(OWNER_EMAIL && SMTP_USER && SMTP_PASS)
-    });
-  }
+  if (req.method === "GET" && new URL(req.url, "http://localhost").pathname === "/api/health") {
+
+  return sendJson(res, req, 200, {
+    status: "ok",
+    service: BUSINESS_NAME,
+    emailConfigured: Boolean(OWNER_EMAIL && SMTP_USER && SMTP_PASS)
+  });
+
+}
 
   if (req.method === "POST" && req.url === "/api/quote") {
     return handleQuote(req, res);
