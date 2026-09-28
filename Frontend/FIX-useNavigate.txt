@@ -1,0 +1,19 @@
+PRESS & PARCEL - useNavigate ERROR FIX
+
+The Home component does NOT need useNavigate.
+
+The correct import is:
+import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
+
+There must NOT be this line inside Home:
+const navigate = useNavigate();
+
+If your browser still shows:
+ReferenceError: useNavigate is not defined
+
+you are running an older App.jsx. Replace your local src/App.jsx with the one in this ZIP and restart Vite.
+
+Then run:
+npm run dev
+
+If Vite keeps serving an old module, stop it with Ctrl+C and start it again.
