@@ -1,111 +1,79 @@
-# Press & Parcel
+# Press & Parcel Frontend
 
-Press & Parcel is a React + Vite customer-facing print, branding, packaging, merchandise and event-materials platform.
+React + Vite frontend for the Press & Parcel website.
 
-## MVP architecture
+## Folder structure
 
-The first backend version intentionally stays simple:
+```text
+Frontend/
+├── public/
+│   ├── _redirects
+│   └── press-and-parcel-logo.png
+├── src/
+│   ├── components/
+│   │   ├── Footer.jsx
+│   │   ├── Header.jsx
+│   │   ├── PageHero.jsx
+│   │   ├── QuoteForm.jsx
+│   │   └── ScrollToTop.jsx
+│   ├── data/
+│   │   └── catalog.js
+│   ├── pages/
+│   │   ├── About.jsx
+│   │   ├── Contact.jsx
+│   │   ├── Home.jsx
+│   │   ├── Industries.jsx
+│   │   ├── Products.jsx
+│   │   └── Quote.jsx
+│   ├── App.jsx
+│   ├── main.jsx
+│   └── styles.css
+├── .env.example
+├── index.html
+├── package.json
+└── package-lock.json
+```
 
-1. Customer fills the Get a Quote form.
-2. React sends the form to the Node backend.
-3. Backend sends an email to the Press & Parcel business email containing the complete enquiry.
-4. Backend sends a confirmation email to the customer.
-5. The team contacts the customer by phone and completes the quotation/deal manually.
-
-There is no database, customer login, payment system or automated quotation engine in this MVP.
-
-## Frontend
+## Install
 
 ```bash
 npm install
-npm run dev
 ```
 
-Create `.env` if needed:
-
-```env
-VITE_API_URL=http://localhost:5000
-```
-
-## Backend
-
-Open another terminal:
-
-```bash
-cd backend
-npm install
-```
-
-Copy:
-
-```text
-backend/.env.example
-```
-
-to:
-
-```text
-backend/.env
-```
-
-Then configure your SMTP credentials.
-
-Start:
+## Run locally
 
 ```bash
 npm run dev
 ```
 
-or:
+## EmailJS configuration
+
+The quote form is prepared for EmailJS. Create a local `.env` file from `.env.example` and add the values from EmailJS:
+
+```env
+VITE_EMAILJS_SERVICE_ID=service_xxxxxxx
+VITE_EMAILJS_OWNER_TEMPLATE_ID=template_xxxxxxx
+VITE_EMAILJS_CUSTOMER_TEMPLATE_ID=template_xxxxxxx
+VITE_EMAILJS_PUBLIC_KEY=your_public_key
+```
+
+The form sends two emails:
+
+1. Quote notification to `pressndparcel@gmail.com`.
+2. Confirmation to the customer's submitted email address.
+
+No EmailJS private API secret is placed in the frontend.
+
+## Production build
 
 ```bash
-npm start
+npm run build
 ```
 
-## Gmail SMTP example
+For Netlify, use:
 
-For a Gmail/Google Workspace mailbox:
+- Base directory: `Frontend` (if deploying from the repository root)
+- Build command: `npm run build`
+- Publish directory: `dist`
 
-```env
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=465
-SMTP_SECURE=true
-SMTP_USER=your-business-email@gmail.com
-SMTP_PASS=your-Google-App-Password
-OWNER_EMAIL=your-business-email@gmail.com
-BUSINESS_NAME=Press & Parcel
-FRONTEND_URL=http://localhost:5173
-```
-
-Use a Google App Password rather than your normal Google account password.
-
-## Production
-
-Deploy the frontend and backend separately.
-
-Set:
-
-```env
-VITE_API_URL=https://your-backend-domain.com
-```
-
-on the frontend.
-
-Set the backend environment variables on the backend hosting service.
-
-Do not put SMTP credentials in the React frontend.
-
-## Next phase
-
-When the MVP is validated, the same backend can later be expanded with:
-
-- Quote records
-- Customer records
-- Artwork/file uploads
-- Admin dashboard
-- Order status
-- Pricing rules
-- Product management
-- WhatsApp integration
-- Payments
-- Delivery tracking
+The `public/_redirects` file keeps React Router routes working on direct page refreshes.
