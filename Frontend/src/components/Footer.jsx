@@ -10,10 +10,10 @@ export default function Footer() {
             <img src="/press-and-parcel-logo.png" alt="" />
             <div>
               <strong>Press & Parcel</strong>
-              <span>Print. Brand. Deliver.</span>
+              <span>Brand. Print. Deliver.</span>
             </div>
           </Link>
-          <p>One partner for printing, branding, packaging, merchandise and event materials.</p>
+          <p>One partner for branding, printing, packaging, merchandise and event materials.</p>
         </div>
 
         <div>
@@ -25,8 +25,8 @@ export default function Footer() {
 
         <div>
           <h4>Services</h4>
-          <span>Print</span>
           <span>Brand</span>
+          <span>Print</span>
           <span>Package</span>
           <span>Promote</span>
         </div>
@@ -42,7 +42,7 @@ export default function Footer() {
 
       <div className="container footer-bottom">
         <span>© {new Date().getFullYear()} Press & Parcel. All rights reserved.</span>
-        <span>Print • Brand • Package • Promote</span>
+        <span>Brand • Print • Package • Promote</span>
       </div>
     </footer>
   );

@@ -10,7 +10,7 @@ export default function Industries() {
 
   return (
     <>
-      <PageHero eyebrow="INDUSTRIES" title="Designed around your field." text="Different industries need different combinations of print, branding, packaging, signage and merchandise. Choose a field to see the typical requirements." />
+      <PageHero eyebrow="INDUSTRIES" title="Designed around your field." text="Different industries need different combinations of branding, printing, packaging, signage and merchandise. Choose a field to see the typical requirements." />
       <section className="section">
         <div className="container industry-layout">
           <aside className="industry-sidebar">

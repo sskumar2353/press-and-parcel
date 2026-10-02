@@ -21,7 +21,7 @@ export default function Contact() {
             <div className="contact-actions"><Link className="button primary" to="/quote">Start a Quote <ArrowRight size={17} /></Link><a className="button ghost" href="mailto:pressndparcel@gmail.com">Email Us <Send size={17} /></a></div>
           </div>
           <div className="contact-side">
-            <div className="contact-panel"><div className="eyebrow">PRESS & PARCEL</div><h3>Print • Brand • Package • Promote</h3><p>One partner for business stationery, packaging, apparel, signage, event materials and personalised products.</p><div className="contact-service-list">{["Custom printing", "Branding & signage", "Packaging", "Corporate merchandise", "Event materials"].map((item) => <span key={item}><Check size={15} />{item}</span>)}</div></div>
+            <div className="contact-panel"><div className="eyebrow">PRESS & PARCEL</div><h3>Brand • Print • Package • Promote</h3><p>One partner for business stationery, packaging, apparel, signage, event materials and personalised products.</p><div className="contact-service-list">{["Custom printing", "Branding & signage", "Packaging", "Corporate merchandise", "Event materials"].map((item) => <span key={item}><Check size={15} />{item}</span>)}</div></div>
             <div className="contact-panel light"><div className="eyebrow">FOR PROJECTS</div><h3>Need pricing?</h3><p>Send the product, quantity, deadline and any artwork details. The dedicated quote page is built for project enquiries.</p><Link className="text-link" to="/quote">Go to Get a Quote <ArrowRight size={15} /></Link></div>
           </div>
         </div>

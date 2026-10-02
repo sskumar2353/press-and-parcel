@@ -474,7 +474,7 @@ function createCustomerConfirmationEmail({ name }) {
         margin: 8px 0 0;
         color: #d1d5db;
       ">
-        Print. Brand. Deliver.
+        Brand. Print. Deliver.
       </p>
 
     </div>
@@ -535,7 +535,7 @@ function createCustomerConfirmationEmail({ name }) {
       ">
         Regards,<br>
         <strong>${escapeHtml(BUSINESS_NAME)}</strong><br>
-        Print. Brand. Deliver.
+        Brand. Print. Deliver.
       </p>
 
     </div>
