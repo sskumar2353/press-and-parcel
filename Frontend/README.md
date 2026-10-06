@@ -8,7 +8,7 @@ React + Vite frontend for the Press & Parcel website.
 Frontend/
 ├── public/
 │   ├── _redirects
-│   └── press-and-parcel-logo.png
+│   └── Logo.png
 ├── src/
 │   ├── components/
 │   │   ├── Footer.jsx

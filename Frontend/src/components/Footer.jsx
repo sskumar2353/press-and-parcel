@@ -7,7 +7,7 @@ export default function Footer() {
       <div className="container footer-grid">
         <div>
           <Link to="/" className="brand footer-brand">
-            <img src="/press-and-parcel-logo.png" alt="" />
+            <img src="/Logo.png" alt="Brand Logo" />
             <div>
               <strong>Press & Parcel</strong>
               <span>Brand. Print. Deliver.</span>

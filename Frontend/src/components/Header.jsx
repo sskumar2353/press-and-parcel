@@ -11,7 +11,7 @@ export default function Header() {
     <header className="site-header">
       <div className="container nav-wrap">
         <Link to="/" className="brand" onClick={closeMenu}>
-          <img src="/press-and-parcel-logo.png" alt="Press & Parcel logo" />
+          <img src="/Logo.png" alt="Press & Parcel logo" />
           <div>
             <strong>Press & Parcel</strong>
             <span>Brand. Print. Deliver.</span>
